@@ -1,0 +1,193 @@
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { Instrument } from '../types';
+import { calculateVerificationIntervals } from '../utils/metrologyService';
+import { getInstrumentsStore, addInstrument as addInstrumentToMockStore } from '../mock/store';
+
+export const instrumentService = {
+  /**
+   * Fetch all instruments
+   */
+  async getInstruments(): Promise<Instrument[]> {
+    if (isSupabaseConfigured() && supabase) {
+      const { data, error } = await supabase
+        .from('instruments')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        return data.map((row) => this.mapRowToInstrument(row));
+      }
+    }
+
+    return getInstrumentsStore();
+  },
+
+  /**
+   * Fetch single instrument by ID or Code
+   */
+  async getInstrumentById(id: string): Promise<Instrument | null> {
+    if (isSupabaseConfigured() && supabase) {
+      const { data, error } = await supabase
+        .from('instruments')
+        .select('*')
+        .or(`id.eq.${id},instrument_code.eq.${id}`)
+        .maybeSingle();
+
+      if (!error && data) {
+        return this.mapRowToInstrument(data);
+      }
+    }
+
+    const instruments = getInstrumentsStore();
+    return instruments.find((i) => i.id === id || i.metrology.accuracyClass === id) || null;
+  },
+
+  /**
+   * Save a new instrument
+   * Calculates n = Max / e using metrology service before storing!
+   */
+  async saveInstrument(instrument: Instrument): Promise<Instrument> {
+    // 1. Calculate verified n value using existing metrology service
+    const verifiedN = calculateVerificationIntervals(
+      instrument.metrology.maxCapacity,
+      instrument.metrology.maxUnit,
+      instrument.metrology.verificationIntervalE,
+      instrument.metrology.eUnit
+    );
+
+    const verifiedInstrument: Instrument = {
+      ...instrument,
+      metrology: {
+        ...instrument.metrology,
+        verificationScaleIntervalsN: verifiedN,
+      },
+    };
+
+    if (isSupabaseConfigured() && supabase) {
+      const row = this.mapInstrumentToRow(verifiedInstrument);
+      const { data, error } = await supabase
+        .from('instruments')
+        .insert(row)
+        .select()
+        .single();
+
+      if (error) {
+        throw new Error(`Failed to save instrument to database: ${error.message}`);
+      }
+
+      return this.mapRowToInstrument(data);
+    }
+
+    // Local Store Fallback
+    addInstrumentToMockStore(verifiedInstrument);
+    return verifiedInstrument;
+  },
+
+  /**
+   * Map Supabase DB Row to Instrument Frontend Type
+   */
+  mapRowToInstrument(row: any): Instrument {
+    const verifiedN = calculateVerificationIntervals(
+      Number(row.max_capacity),
+      row.max_unit || 'g',
+      Number(row.verification_interval_e),
+      row.verification_interval_e_unit || 'g'
+    );
+
+    // Canonical Class formatting ('III' -> 'Class III' for frontend)
+    const rawClass = row.accuracy_class || 'III';
+    const accuracyClass = rawClass.startsWith('Class') ? rawClass : `Class ${rawClass}`;
+
+    return {
+      id: row.id,
+      manufacturer: {
+        name: row.manufacturer || 'Unknown Manufacturer',
+        address: 'Registered Metrology Facility',
+        country: 'India',
+        contactPerson: 'Technical Director',
+        email: 'info@manufacturer.demo',
+        phone: '+91 00000 00000',
+      },
+      model: {
+        instrumentType: row.instrument_type || 'Electronic Weighing Scale',
+        modelName: row.model || row.instrument_code || 'Model Standard',
+        serialNumber: row.serial_number || row.instrument_code,
+        firmwareVersion: 'v1.0.0-OIML',
+        yearOfManufacture: 2026,
+        intendedApplication: 'Commercial Trade & Legal Verification',
+      },
+      metrology: {
+        accuracyClass: accuracyClass as any,
+        maxCapacity: Number(row.max_capacity),
+        maxUnit: row.max_unit || 'kg',
+        minCapacity: Number(row.min_capacity),
+        minUnit: row.min_unit || 'kg',
+        scaleIntervalD: Number(row.scale_interval_d),
+        dUnit: row.scale_interval_d_unit || 'g',
+        verificationIntervalE: Number(row.verification_interval_e),
+        eUnit: row.verification_interval_e_unit || 'g',
+        verificationScaleIntervalsN: Number(row.verification_intervals_n) || verifiedN,
+        tareRange: Number(row.maximum_tare_effect) || 0,
+        tempRangeMin: -10,
+        tempRangeMax: 40,
+        isMultiInterval: false,
+        zeroSettingType: row.zero_setting_type || 'SEMI_AUTOMATIC',
+        tareDeviceAvailable: Boolean(row.tare_device_available),
+        tareType: row.tare_type || 'NONE',
+        maximumTareEffect: Number(row.maximum_tare_effect) || 0,
+        maximumTareUnit: row.maximum_tare_unit || 'kg',
+      },
+      registeredDate: (row.created_at || new Date().toISOString()).substring(0, 10),
+      lastEvaluated: (row.updated_at || new Date().toISOString()).substring(0, 10),
+      status: (row.status === 'ACTIVE' || row.status === 'INACTIVE' || row.status === 'OUT_OF_SERVICE')
+        ? row.status
+        : 'ACTIVE',
+    };
+  },
+
+  /**
+   * Map Instrument Frontend Type to Supabase DB Row
+   */
+  mapInstrumentToRow(instrument: Instrument): any {
+    const verifiedN = calculateVerificationIntervals(
+      instrument.metrology.maxCapacity,
+      instrument.metrology.maxUnit,
+      instrument.metrology.verificationIntervalE,
+      instrument.metrology.eUnit
+    );
+
+    // Convert frontend 'Class III' -> Canonical DB format 'III'
+    const canonicalClass = (instrument.metrology.accuracyClass || 'Class III').replace(/^Class\s*/i, '');
+
+    const masterStatus = (instrument.status === 'ACTIVE' || instrument.status === 'INACTIVE' || instrument.status === 'OUT_OF_SERVICE')
+      ? instrument.status
+      : 'ACTIVE';
+
+    return {
+      instrument_code: instrument.id.startsWith('INS-') ? instrument.id : `INS-${Date.now()}`,
+      manufacturer: instrument.manufacturer?.name || 'Unknown Manufacturer',
+      model: instrument.model?.modelName || 'Model Standard',
+      serial_number: instrument.model?.serialNumber || instrument.id,
+      instrument_type: instrument.model?.instrumentType || 'Electronic Weighing Scale',
+      accuracy_class: canonicalClass,
+      max_capacity: instrument.metrology.maxCapacity,
+      max_unit: instrument.metrology.maxUnit,
+      min_capacity: instrument.metrology.minCapacity,
+      min_unit: instrument.metrology.minUnit,
+      scale_interval_d: instrument.metrology.scaleIntervalD,
+      scale_interval_d_unit: instrument.metrology.dUnit,
+      verification_interval_e: instrument.metrology.verificationIntervalE,
+      verification_interval_e_unit: instrument.metrology.eUnit,
+      verification_intervals_n: verifiedN,
+      digital_indication: true,
+      zero_setting_type: instrument.metrology.zeroSettingType || 'SEMI_AUTOMATIC',
+      tare_device_available: Boolean(instrument.metrology.tareDeviceAvailable),
+      tare_type: instrument.metrology.tareType || 'NONE',
+      maximum_tare_effect: instrument.metrology.maximumTareEffect || 0,
+      maximum_tare_unit: instrument.metrology.maximumTareUnit || 'kg',
+      load_receptor_type: 'PLATFORM',
+      number_of_supports: 4,
+      status: masterStatus,
+    };
+  },
+};
