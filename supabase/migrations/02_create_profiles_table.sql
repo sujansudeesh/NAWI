@@ -116,3 +116,28 @@ GRANT SELECT ON public.profiles TO authenticated;
 -- UPDATE permission is EXPLICITLY WITHHELD for 'role', 'organization', 'id', 'created_at', and 'updated_at'.
 -- Note: organization may only be changed through an authorized administrative process.
 GRANT UPDATE (full_name) ON public.profiles TO authenticated;
+
+-- 8. Automatic Email Confirmation Trigger Function (Bypasses email rate limits by auto-confirming users on creation)
+CREATE OR REPLACE FUNCTION public.auto_confirm_new_users()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF NEW.email_confirmed_at IS NULL THEN
+    NEW.email_confirmed_at = now();
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_auth_user_created_auto_confirm ON auth.users;
+CREATE TRIGGER on_auth_user_created_auto_confirm
+  BEFORE INSERT ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION public.auto_confirm_new_users();
+
+-- Defense-in-depth: Revoke public execution on auto confirm function
+REVOKE EXECUTE ON FUNCTION public.auto_confirm_new_users() FROM PUBLIC;
+
