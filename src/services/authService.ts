@@ -128,7 +128,7 @@ export const authService = {
       throw error;
     }
 
-    if (data && data.session) {
+    if (data && data.user && data.session) {
       await this.getCurrentProfile(data.user.id);
       return {
         user: data.user,

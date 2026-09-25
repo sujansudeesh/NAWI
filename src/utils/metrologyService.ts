@@ -13,6 +13,7 @@ import { calculateSessionProgress } from '../services/evaluationResultService';
 // Mass unit conversion factors relative to milligrams (mg)
 const MASS_UNIT_TO_MG: Record<MassUnit, number> = {
   mg: 1,
+  ct: 200, // 1 ct = 200 mg
   g: 1000,
   kg: 1000000,
   t: 1000000000,
