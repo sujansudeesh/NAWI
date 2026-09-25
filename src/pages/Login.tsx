@@ -49,7 +49,14 @@ export const Login: React.FC = () => {
         navigate('/dashboard', { replace: true });
       }
     } catch (err: any) {
-      setErrorMessage(err.message || (isSignUpMode ? 'Registration failed.' : 'Invalid email or password.'));
+      const rawMsg = err.message || '';
+      if (rawMsg.toLowerCase().includes('email not confirmed')) {
+        setErrorMessage('Email not confirmed. Please check your email inbox to verify your account before logging in (or disable "Confirm Email" in your Supabase Dashboard -> Authentication -> Providers -> Email).');
+      } else if (rawMsg.toLowerCase().includes('invalid login credentials')) {
+        setErrorMessage('Invalid email or password. Please verify your credentials or use the Register / Sign Up tab to create an account.');
+      } else {
+        setErrorMessage(rawMsg || (isSignUpMode ? 'Registration failed.' : 'Invalid email or password.'));
+      }
     } finally {
       setLoading(false);
     }
