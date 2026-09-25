@@ -95,8 +95,10 @@ export const authService = {
     localStorage.removeItem('nawi_demo_role');
     localStorage.removeItem('nawi_current_user');
 
+    const cleanEmail = email.trim();
+
     const { data, error } = await supabase.auth.signUp({
-      email: email.trim(),
+      email: cleanEmail,
       password,
       options: {
         data: {
@@ -106,20 +108,53 @@ export const authService = {
     });
 
     if (error) {
+      const msg = error.message.toLowerCase();
+      // If error is rate limit or user already registered, try signing in immediately
+      if (msg.includes('rate limit') || msg.includes('already registered') || msg.includes('already exists')) {
+        try {
+          const signInRes = await this.signIn(cleanEmail, password);
+          return {
+            user: signInRes.user,
+            session: signInRes.session,
+            confirmationRequired: false,
+          };
+        } catch (signInErr: any) {
+          if (signInErr.message?.toLowerCase().includes('email not confirmed')) {
+            throw new Error('User registered in database! Email confirmation is enabled in your Supabase project — please click the email link or turn off "Confirm Email" in Supabase Dashboard.');
+          }
+          throw error;
+        }
+      }
       throw error;
     }
 
-    if (!data || !data.user) {
-      throw new Error('Registration failed.');
+    if (data && data.session) {
+      await this.getCurrentProfile(data.user.id);
+      return {
+        user: data.user,
+        session: data.session,
+        confirmationRequired: false,
+      };
     }
 
-    const confirmationRequired = !data.session;
+    if (data && data.user) {
+      try {
+        const signInRes = await this.signIn(cleanEmail, password);
+        return {
+          user: signInRes.user,
+          session: signInRes.session,
+          confirmationRequired: false,
+        };
+      } catch (_e) {
+        return {
+          user: data.user,
+          session: null,
+          confirmationRequired: true,
+        };
+      }
+    }
 
-    return {
-      user: data.user,
-      session: data.session,
-      confirmationRequired,
-    };
+    throw new Error('Registration failed.');
   },
 
   /**
