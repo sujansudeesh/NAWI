@@ -40,10 +40,11 @@ export function toMicrograms(value: number | string, unit: MassUnit): bigint {
   const negative = str.startsWith('-');
   const cleanStr = negative ? str.slice(1) : str;
 
+  const multiplier = MICROGRAM_MULTIPLIERS[unit] || 1000000n;
+
   // Handle exponential scientific notation (e.g., 1e-3)
   if (cleanStr.includes('e') || cleanStr.includes('E')) {
     const num = Number(cleanStr);
-    const multiplier = MICROGRAM_MULTIPLIERS[unit] || 1000000n;
     const res = BigInt(Math.round(num * Number(multiplier)));
     return negative ? -res : res;
   }
@@ -51,24 +52,27 @@ export function toMicrograms(value: number | string, unit: MassUnit): bigint {
   const parts = cleanStr.split('.');
   const intPart = parts[0] || '0';
   const fracPart = parts[1] || '';
+  const k = fracPart.length;
 
-  const scale = UNIT_DECIMAL_SCALES[unit] ?? 6;
+  const digitsStr = (intPart + fracPart).replace(/^0+/, '') || '0';
+  const digits = BigInt(digitsStr);
 
-  let paddedFrac = fracPart.padEnd(scale, '0');
-  let roundAdd = 0n;
-
-  if (paddedFrac.length > scale) {
-    const extra = paddedFrac.slice(scale);
-    paddedFrac = paddedFrac.slice(0, scale);
-    if (extra[0] >= '5') {
-      roundAdd = 1n;
-    }
+  if (k === 0) {
+    const res = digits * multiplier;
+    return negative ? -res : res;
   }
 
-  let microStr = (intPart + paddedFrac).replace(/^0+/, '');
-  if (microStr === '') microStr = '0';
+  const denom = 10n ** BigInt(k);
+  const num = digits * multiplier;
 
-  let micrograms = BigInt(microStr) + roundAdd;
+  const quotient = num / denom;
+  const remainder = num % denom;
+
+  let micrograms = quotient;
+  if (remainder * 2n >= denom) {
+    micrograms += 1n;
+  }
+
   return negative ? -micrograms : micrograms;
 }
 
